@@ -1,6 +1,8 @@
+
 import base64
 import zlib
 import json
+import os
 import os
 import hashlib
 import qrcode
@@ -237,18 +239,7 @@ class QRCodeMasterProcessor:
 
 
 class TextQRProcessor(QRCodeMasterProcessor):
-    def decode_qr_text(self, qr_data: str) -> str:
-        """
-        Decode text from a QR code.
-
-        Args:
-            qr_data (str): Full QR code data including metadata
-
-        Returns:
-            str: Decoded text
-        """
-        decoded_bytes = self.decode_qr_data(qr_data)
-        return decoded_bytes
+    pass
 
 
 class FileQRProcessor(QRCodeMasterProcessor):
@@ -408,169 +399,27 @@ class FileQRProcessor(QRCodeMasterProcessor):
 
         return full_path
 
-    def _pad_base64(self, base64_str: str) -> str:
-        """
-        Ensure the base64 string is properly padded.
-
-        Args:
-            base64_str (str): Base64-encoded string
-
-        Returns:
-            str: Properly padded base64 string
-        """
-        padding_needed = len(base64_str) % 4
-        if padding_needed:
-            base64_str += "=" * (4 - padding_needed)
-        return base64_str
-
 
 class FolderQRProcessor(FileQRProcessor):
-    def _estimate_qr_code_capacity(self, version: int) -> int:
-        """
-        Estimate the maximum data capacity for a given QR code version.
-        """
-        capacity_map = {
-            1: 25,
-            2: 47,
-            3: 77,
-            4: 114,
-            5: 154,
-            6: 195,
-            7: 224,
-            8: 279,
-            9: 335,
-            10: 395,
-            11: 512,
-            12: 625,
-            13: 775,
-            14: 950,
-            15: 1145,
-            16: 1360,
-            17: 1620,
-            18: 1925,
-            19: 2250,
-            20: 2600,
-            21: 2965,
-            22: 3355,
-            23: 3775,
-            24: 4225,
-            25: 4715,
-            26: 5245,
-            27: 5815,
-            28: 6425,
-            29: 7075,
-            30: 7765,
-            31: 8495,
-            32: 9265,
-            33: 10075,
-            34: 10915,
-            35: 11795,
-            36: 12715,
-            37: 13675,
-            38: 14675,
-            39: 15715,
-            40: 16815,
-        }
-        return capacity_map.get(
-            version, 25
-        )  # Default to smallest if version is out of range
-
-    def _smart_chunk_folder_structure(
-        self, folder_structure: Dict[str, Any], max_version: int = 40
-    ) -> List[Dict[str, Any]]:
-        """
-        Intelligently chunk the folder structure to fit within QR code limitations.
-        """
-        print(f"DEBUG: Starting smart chunking for folder structure")
-        print(
-            f"DEBUG: Total children to chunk: {len(folder_structure.get('children', []))}"
-        )
-        print(f"DEBUG: Using max QR code version: {max_version}")
-
-        # Start with the full folder structure
-        base_structure = folder_structure.copy()
-        base_structure["children"] = []
-
-        # Track chunks and remaining children
-        chunks = []
-        remaining_children = folder_structure.get("children", [])
-
-        while remaining_children:
-            # Create a chunk
-            current_chunk = base_structure.copy()
-            current_chunk["children"] = []
-            current_chunk_size = 0
-
-            # Add children to the chunk
-            while (
-                remaining_children
-                and current_chunk_size < self._estimate_qr_code_capacity(max_version)
-            ):
-                # Take the next child
-                child = remaining_children.pop(0)
-
-                # Estimate child size
-                child_json = json.dumps(child)
-                child_size = len(child_json)
-
-                print(f"DEBUG: Processing child: {child.get('name', 'Unknown')}")
-                print(f"DEBUG: Child JSON size: {child_size} characters")
-                print(f"DEBUG: Current chunk size: {current_chunk_size}")
-                print(
-                    f"DEBUG: Max capacity: {self._estimate_qr_code_capacity(max_version)}"
-                )
-
-                # Check if adding this child would exceed capacity
-                if current_chunk_size + child_size > self._estimate_qr_code_capacity(
-                    max_version
-                ):
-                    # Put the child back and stop adding
-                    print(
-                        f"DEBUG: Child {child.get('name', 'Unknown')} would exceed capacity. Stopping chunk."
-                    )
-                    remaining_children.insert(0, child)
-                    break
-
-                # Add the child to the chunk
-                current_chunk["children"].append(child)
-                current_chunk_size += child_size
-
-            # Add chunk info
-            current_chunk["chunk_info"] = {
-                "chunk_number": len(chunks) + 1,
-                "total_chunks": None,  # Will be updated later
-            }
-
-            chunks.append(current_chunk)
-            print(
-                f"DEBUG: Created chunk {len(chunks)} with {len(current_chunk['children'])} children"
-            )
-
-        # Update total chunks in each chunk
-        total_chunks = len(chunks)
-        for chunk in chunks:
-            chunk["chunk_info"]["total_chunks"] = total_chunks
-
-        print(f"DEBUG: Total chunks created: {total_chunks}")
-        print(f"DEBUG: Remaining children: {len(remaining_children)}")
-
-        return chunks
-
     def _traverse_folder(
         self, folder_path: str, base_path: str = None, max_depth: int = 3
     ) -> Dict[str, Any]:
         """
         Recursively traverse a folder and create a structured representation.
-        """
-        print(f"DEBUG: Traversing folder: {folder_path}")
-        print(f"DEBUG: Current max depth: {max_depth}")
 
+        Args:
+            folder_path (str): Path to the folder to traverse
+            base_path (str, optional): Base path for relative path calculation
+            max_depth (int, optional): Maximum recursion depth
+
+        Returns:
+            Dict[str, Any]: Structured representation of the folder
+        """
         # Initialize base path if not provided
         base_path = base_path or folder_path
 
         # Prevent excessive recursion
         if max_depth <= 0:
-            print("DEBUG: Max depth reached. Returning empty structure.")
             return {}
 
         folder_structure = {
@@ -583,14 +432,10 @@ class FolderQRProcessor(FileQRProcessor):
 
         try:
             # List all entries in the directory
-            entries = list(os.scandir(folder_path))
-            print(f"DEBUG: Found {len(entries)} entries in {folder_path}")
-
-            for entry in entries:
+            for entry in os.scandir(folder_path):
                 try:
                     # Handle files
                     if entry.is_file():
-                        print(f"DEBUG: Processing file: {entry.path}")
                         file_info = {
                             "name": entry.name,
                             "path": os.path.relpath(entry.path, base_path),
@@ -598,25 +443,15 @@ class FolderQRProcessor(FileQRProcessor):
                             "size": entry.stat().st_size,
                         }
 
-                        # Read file content
-                        try:
-                            with open(entry.path, "r", encoding="utf-8") as f:
-                                file_info["content"] = f.read()
-                            file_info["is_text"] = True
-                            print(f"DEBUG: Successfully read text file: {entry.name}")
-                        except UnicodeDecodeError:
-                            # For binary files, base64 encode
-                            print(f"DEBUG: Binary file detected: {entry.name}")
-                            with open(entry.path, "rb") as f:
-                                file_info["content"] = base64.b64encode(
-                                    f.read()
-                                ).decode("utf-8")
-                            file_info["is_text"] = False
-
+                        # Read file content (using same logic as FileQRProcessor)
+                        file_content, is_text = self._get_file_content(entry.path)
+                        file_info["content"] = file_content
+                        file_info["is_text"] = is_text
                         # Calculate file hash
-                        file_info["hash"] = hashlib.md5(
+                        file_hash = hashlib.md5(
                             file_info["content"].encode("utf-8")
                         ).hexdigest()
+                        file_info["hash"] = file_hash
 
                         folder_structure["children"].append(file_info)
                         folder_structure["metadata"]["total_files"] += 1
@@ -624,7 +459,6 @@ class FolderQRProcessor(FileQRProcessor):
 
                     # Recursively handle subdirectories
                     elif entry.is_dir():
-                        print(f"DEBUG: Processing subdirectory: {entry.path}")
                         subdir = self._traverse_folder(
                             entry.path, base_path, max_depth - 1
                         )
@@ -639,15 +473,11 @@ class FolderQRProcessor(FileQRProcessor):
 
                 except Exception as entry_error:
                     # Log or handle individual entry errors
-                    print(f"ERROR processing {entry.path}: {entry_error}")
+                    print(f"Error processing {entry.path}: {entry_error}")
 
         except Exception as folder_error:
-            print(f"ERROR traversing folder {folder_path}: {folder_error}")
+            print(f"Error traversing folder {folder_path}: {folder_error}")
             return {}
-
-        print(f"DEBUG: Folder traversal complete for {folder_path}")
-        print(f"DEBUG: Total files: {folder_structure['metadata']['total_files']}")
-        print(f"DEBUG: Total size: {folder_structure['metadata']['total_size']} bytes")
 
         return folder_structure
 
@@ -657,18 +487,19 @@ class FolderQRProcessor(FileQRProcessor):
         compress: bool = True,
         encrypt: bool = True,
         max_depth: int = 3,
-        max_version: int = 40,
-    ) -> Tuple[List[Any], List[str]]:
+    ):
         """
-        Generate multiple QR codes for a folder structure.
-        """
-        print(f"DEBUG: Starting folder QR code generation")
-        print(f"DEBUG: Input folder: {folder_path}")
-        print(f"DEBUG: Compression: {compress}")
-        print(f"DEBUG: Encryption: {encrypt}")
-        print(f"DEBUG: Max depth: {max_depth}")
-        print(f"DEBUG: Max QR version: {max_version}")
+        Generate a QR code representing an entire folder structure.
 
+        Args:
+            folder_path (str): Path to the folder to encode
+            compress (bool, optional): Whether to compress the data
+            encrypt (bool, optional): Whether to encrypt the data
+            max_depth (int, optional): Maximum folder traversal depth
+
+        Returns:
+            tuple: (qr_code_image, encoded_folder_data_json)
+        """
         # Validate folder exists
         if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
             raise FileNotFoundError(f"Folder not found: {folder_path}")
@@ -684,38 +515,200 @@ class FolderQRProcessor(FileQRProcessor):
             "max_depth": max_depth,
         }
 
-        print(f"DEBUG: Generated folder metadata:")
-        for key, value in metadata.items():
-            print(f"DEBUG:   {key}: {value}")
+        # Convert folder structure to JSON for QR encoding
+        folder_json = json.dumps(folder_structure)
 
-        # Smart chunking of folder structure
-        folder_chunks = self._smart_chunk_folder_structure(
-            folder_structure, max_version=max_version
+        # Generate QR code
+        return self.generate_qr_code(
+            folder_json, compress=compress, encrypt=encrypt, metadata=metadata
         )
+
+    def _reconstruct_entry(self, entry, current_path):
+        """
+        Helper function to reconstruct a single entry (file or folder) within a folder structure
+        """
+        if entry["type"] == "file":
+            file_path = os.path.join(current_path, entry["name"])
+
+            # Write file content
+            try:
+                if entry.get("is_text", True):
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(entry["content"])
+                else:
+                    with open(file_path, "wb") as f:
+                        f.write(base64.b64decode(entry["content"]))
+            except Exception as e:
+                print(f"Error writing file {file_path}: {e}")
+
+        elif entry["type"] == "directory":
+            subdir_path = os.path.join(current_path, entry["name"])
+            os.makedirs(subdir_path)
+
+            # Recursively reconstruct subdirectory contents
+            for child in entry.get("children", []):
+                self._reconstruct_entry(child, subdir_path)
+
+    def reconstruct_folder_from_qr(
+        self, qr_data: str, output_dir: str = None, restore_structure: bool = True
+    ) -> str:
+        """
+        Reconstruct a folder from QR code data.
+
+        Args:
+            qr_data (str): Full QR code data including metadata
+            output_dir (str, optional): Directory to save the reconstructed folder
+            restore_structure (bool, optional): Whether to restore original folder structure
+
+        Returns:
+            str: Path to the reconstructed folder
+        """
+        # Decode the folder content
+        folder_json = self.decode_qr_data(qr_data)
+        folder_structure = json.loads(folder_json)
+
+        # Prepare output directory
+        output_dir = output_dir or os.getcwd()
+        base_folder_name = folder_structure.get("name", "reconstructed_folder")
+        full_output_path = os.path.join(output_dir, base_folder_name)
+
+        # Ensure unique folder name
+        counter = 1
+        base_full_path = full_output_path
+        while os.path.exists(full_output_path):
+            full_output_path = f"{base_full_path}_{counter}"
+            counter += 1
+
+        # Create base folder
+        os.makedirs(full_output_path)
+
+        # Start reconstruction
+        for child in folder_structure.get("children", []):
+            self._reconstruct_entry(child, full_output_path)
+
+        return full_output_path
+
+    def _compress_large_data(self, data: str) -> str:
+        """
+        Compress large JSON data to reduce size for QR code encoding.
+
+        Args:
+            data (str): JSON string to compress
+
+        Returns:
+            str: Compressed and base64 encoded data
+        """
+        # Compress the data using zlib
+        compressed_data = zlib.compress(data.encode("utf-8"))
+        return base64.b64encode(compressed_data).decode("utf-8")
+
+    def _chunk_folder_structure(
+        self, folder_structure: Dict[str, Any], max_chunk_size: int = 10000
+    ) -> List[str]:
+        """
+        Split large folder structure into manageable chunks.
+
+        Args:
+            folder_structure (Dict[str, Any]): Folder structure to chunk
+            max_chunk_size (int, optional): Maximum size of each chunk
+
+        Returns:
+            List[str]: List of JSON chunks
+        """
+
+        def _recursive_chunk(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+            """
+            Recursively break down the folder structure into chunks.
+            """
+            children = data.get("children", [])
+            chunked_children = []
+            current_chunk = []
+            current_size = 0
+
+            for child in children:
+                child_json = json.dumps(child)
+                child_size = len(child_json)
+
+                if current_size + child_size > max_chunk_size:
+                    chunked_children.append(current_chunk)
+                    current_chunk = [child]
+                    current_size = child_size
+                else:
+                    current_chunk.append(child)
+                    current_size += child_size
+
+            if current_chunk:
+                chunked_children.append(current_chunk)
+
+            return chunked_children
+
+        # Chunk the children
+        chunked_data = _recursive_chunk(folder_structure)
+
+        # Prepare chunk metadata
+        chunks = []
+        for i, chunk in enumerate(chunked_data):
+            chunk_data = dict(folder_structure.copy())
+            chunk_data["children"] = chunk
+            chunk_data["chunk_info"] = {
+                "chunk_number": i + 1,
+                "total_chunks": len(chunked_data),
+            }
+            chunks.append(json.dumps(chunk_data))
+
+        return chunks
+
+    def generate_folder_qr_code(
+        self,
+        folder_path: str,
+        compress: bool = True,
+        encrypt: bool = True,
+        max_depth: int = 3,
+        max_chunk_size: int = 10000,
+    ) -> Tuple[List[Any], List[str]]:
+        """
+        Generate multiple QR codes for a folder structure.
+
+        Args:
+            folder_path (str): Path to the folder to encode
+            compress (bool, optional): Whether to compress the data
+            encrypt (bool, optional): Whether to encrypt the data
+            max_depth (int, optional): Maximum folder traversal depth
+            max_chunk_size (int, optional): Maximum size of each chunk
+
+        Returns:
+            tuple: (list of QR code images, list of encoded data)
+        """
+        # Validate folder exists
+        if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+            raise FileNotFoundError(f"Folder not found: {folder_path}")
+
+        # Traverse the folder
+        folder_structure = self._traverse_folder(folder_path, max_depth=max_depth)
+
+        # Generate metadata
+        metadata = {
+            "original_foldername": os.path.basename(folder_path),
+            "total_files": folder_structure["metadata"]["total_files"],
+            "total_size": folder_structure["metadata"]["total_size"],
+            "max_depth": max_depth,
+        }
+
+        # Chunk the folder structure if it's too large
+        folder_chunks = self._chunk_folder_structure(folder_structure, max_chunk_size)
 
         # Generate QR codes for each chunk
         qr_images = []
         encoded_chunks = []
 
-        print(f"DEBUG: Preparing to generate QR codes for {len(folder_chunks)} chunks")
-
-        for i, chunk in enumerate(folder_chunks, 1):
-            print(f"DEBUG: Processing chunk {i}")
-
-            # Convert chunk to JSON
-            chunk_json = json.dumps(chunk)
-            print(f"DEBUG: Chunk {i} JSON size: {len(chunk_json)} characters")
-
+        for chunk in folder_chunks:
             # Optionally compress the chunk
             if compress:
-                chunk_json = base64.b64encode(
-                    zlib.compress(chunk_json.encode("utf-8"))
-                ).decode("utf-8")
-                print(f"DEBUG: Chunk {i} compressed size: {len(chunk_json)} characters")
+                chunk = self._compress_large_data(chunk)
 
             # Generate QR code for the chunk
             qr_image, encoded_chunk = self.generate_qr_code(
-                chunk_json,
+                chunk,
                 compress=False,  # Already compressed if needed
                 encrypt=encrypt,
                 metadata=metadata,
@@ -724,10 +717,48 @@ class FolderQRProcessor(FileQRProcessor):
             qr_images.append(qr_image)
             encoded_chunks.append(encoded_chunk)
 
-        print(f"DEBUG: QR code generation complete")
-        print(f"DEBUG: Total QR codes generated: {len(qr_images)}")
-
         return qr_images, encoded_chunks
+
+    def reconstruct_folder_from_qr_chunks(
+        self, qr_chunks: List[str], output_dir: str = None
+    ) -> str:
+        """
+        Reconstruct a folder from multiple QR code chunks.
+
+        Args:
+            qr_chunks (List[str]): List of QR code data chunks
+            output_dir (str, optional): Directory to save the reconstructed folder
+
+        Returns:
+            str: Path to the reconstructed folder
+        """
+        # Decode and combine chunks
+        decoded_chunks = []
+        for chunk in qr_chunks:
+            # Decode the chunk
+            decoded_chunk = json.loads(self.decode_qr_data(chunk))
+            decoded_chunks.append(decoded_chunk)
+
+        # Sort chunks if chunk information is available
+        if decoded_chunks and "chunk_info" in decoded_chunks[0]:
+            decoded_chunks.sort(
+                key=lambda x: x.get("chunk_info", {}).get("chunk_number", 0)
+            )
+
+        # Combine children from all chunks
+        base_structure = decoded_chunks[0]
+        combined_children = []
+
+        for chunk in decoded_chunks:
+            combined_children.extend(chunk.get("children", []))
+
+        base_structure["children"] = combined_children
+
+        # Use existing reconstruction method
+        folder_json = json.dumps(base_structure)
+        return self.reconstruct_folder_from_qr(
+            self.generate_qr_code(folder_json)[1], output_dir
+        )
 
 
 # Example usage demonstrating all processors
@@ -740,7 +771,7 @@ def main():
         original_text, compress=True, encrypt=True
     )
     text_processor.save_qr_code(text_qr_image, "text_qr_code.png")
-    decoded_text = text_processor.decode_qr_text(text_encoded_data)
+    decoded_text = text_processor.decode_qr_data(text_encoded_data)
     print("Text Decoding Test:")
     print("Original Text:", original_text)
     print("Decoded Text:", decoded_text)
@@ -774,26 +805,54 @@ def main():
         reconstructed_content = f.read()
 
     print("Files Match:", original_content == reconstructed_content)
+    print()
 
+    # Folder QR Processor Example
     folder_processor = FolderQRProcessor()
-
-    # Example folder to encode
     test_folder = "test"
 
-    # Generate QR code for the folder
-    folder_qr_image, folder_encoded_data = folder_processor.generate_folder_qr_code(
+    # Generate QR codes for the folder
+    folder_qr_images, folder_encoded_chunks = folder_processor.generate_folder_qr_code(
         test_folder, compress=True, encrypt=True, max_depth=2  # Limit depth to 2 levels
     )
 
-    # Save QR code
-    folder_processor.save_qr_code(folder_qr_image, "folder_qr_code.png")
+    # Save QR codes
+    for i, qr_image in enumerate(folder_qr_images):
+        folder_processor.save_qr_code(qr_image, f"folder_qr_code_{i}.png")
 
     # Reconstruct folder
-    reconstructed_folder = folder_processor.reconstruct_folder_from_qr(
-        folder_encoded_data, output_dir=""
+    reconstructed_folder = folder_processor.reconstruct_folder_from_qr_chunks(
+        folder_encoded_chunks, output_dir=""
     )
 
     print(f"Folder reconstructed at: {reconstructed_folder}")
+    print()
+
+    # Create a folder with files for testing chunked encoding
+    test_folder_chunk = "test_chunk"
+    os.makedirs(test_folder_chunk, exist_ok=True)
+
+    # Create some files in the folder
+    with open(os.path.join(test_folder_chunk, "file1.txt"), "w") as f:
+        f.write("This is a test file 1.")
+    with open(os.path.join(test_folder_chunk, "file2.txt"), "w") as f:
+        f.write("This is a test file 2.")
+
+    # Generate chunked QR codes
+    qr_images, encoded_chunks = folder_processor.generate_folder_qr_code(
+        test_folder_chunk, compress=True, encrypt=True, max_depth=2, max_chunk_size=500
+    )
+
+    # Save the qr codes to files
+    for i, qr_image in enumerate(qr_images):
+        folder_processor.save_qr_code(qr_image, f"folder_qr_code_chunk_{i}.png")
+
+    # Reconstruct folder from chunks
+    reconstructed_folder_chunk = folder_processor.reconstruct_folder_from_qr_chunks(
+        encoded_chunks, output_dir="."
+    )
+
+    print(f"Chunked folder reconstructed at: {reconstructed_folder_chunk}")
 
 
 if __name__ == "__main__":
