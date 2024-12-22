@@ -13,13 +13,13 @@ from src.CodeGenerator import (
 )
 
 
-class TestQRcodeMasterProcessor:
+class TestQRCodeMasterProcessor:
     def test_init(self):
-        processor = QRcodeMasterProcessor()
+        processor = QRCodeMasterProcessor()
         assert processor is not None
 
     def test_process(self):
-        processor = QRcodeMasterProcessor()
+        processor = QRCodeMasterProcessor()
         # Mock input and output files
         input_file = "input.txt"
         output_file = "output.txt"
