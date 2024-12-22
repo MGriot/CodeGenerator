@@ -139,63 +139,65 @@ class QRCodeMasterProcessor:
         """
         return self.cipher_suite.decrypt(encrypted_data)
 
+    def _encode_base64_str(self, data: bytes) -> str:
+        """Convert bytes to base64 string"""
+        return base64.b64encode(data).decode('utf-8')
+
     def generate_qr_code(
         self,
         data: Union[str, bytes],
         compress: bool = False,
         encrypt: bool = False,
         metadata: Dict[str, Any] = None,
-    ) -> Tuple[Image.Image, str]:
-        """
-        Generate a QR code from input data with optional compression and encryption.
-
-        Args:
-            data (Union[str, bytes]): Data to encode
-            compress (bool, optional): Whether to compress the data
-            encrypt (bool, optional): Whether to encrypt the data
-            metadata (Dict[str, Any], optional): Additional metadata to include in the QR code
-
-        Returns:
-            tuple: (qr_code_image, encoded_data_json)
-        """
-        # Prepare metadata for tracking processing steps
+        max_chunk_size: int = 1000
+    ) -> Tuple[List[Image.Image], List[str]]:
         if metadata is None:
             metadata = {}
         metadata["compressed"] = compress
         metadata["encrypted"] = encrypt
 
-        # Convert input to bytes if it's a string
-        processed_data = data if not isinstance(data, str) else data.encode("utf-8")
+        # Convert input to bytes
+        processed_data = data.encode("utf-8") if isinstance(data, str) else data
 
-        # Process data based on compression and encryption flags
+        # Process data based on flags
         if compress:
             processed_data = self.compress_data(processed_data)
-            processed_data = base64.b64encode(processed_data).decode("utf-8")
+            processed_data = self._encode_base64_str(processed_data)
 
         if encrypt:
-            processed_data = self.encrypt_data(processed_data)
-            processed_data = base64.b64encode(processed_data).decode("utf-8")
+            processed_data = self.encrypt_data(processed_data if isinstance(processed_data, bytes) else processed_data.encode('utf-8'))
+            processed_data = self._encode_base64_str(processed_data)
 
-        # Combine metadata and processed data
+        if not (compress or encrypt):
+            processed_data = processed_data.decode('utf-8') if isinstance(processed_data, bytes) else processed_data
+
+        # Create QR data
         qr_data = json.dumps({"metadata": metadata, "content": processed_data})
+        chunks = self._split_data_for_qr(qr_data, max_chunk_size)
 
-        # Determine QR code version dynamically
-        version = self._calculate_qr_version(qr_data)
+        qr_images = []
+        encoded_chunks = []
 
-        # Create QR code with adaptive sizing
-        qr = qrcode.QRCode(
-            version=version,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        qr.add_data(qr_data)
-        qr.make(fit=True)
+        for i, chunk in enumerate(chunks):
+            chunk_metadata = metadata.copy()
+            chunk_metadata["chunk_number"] = i + 1
+            chunk_metadata["total_chunks"] = len(chunks)
+            chunk_data = json.dumps({"metadata": chunk_metadata, "content": chunk})
 
-        # Create image
-        img = qr.make_image(fill_color="black", back_color="white")
+            version = self._calculate_qr_version(chunk_data)
+            qr = qrcode.QRCode(
+                version=version,
+                error_correction=qrcode.constants.ERROR_CORRECT_H,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(chunk_data)
+            qr.make(fit=True)
+            
+            qr_images.append(qr.make_image(fill_color="black", back_color="white"))
+            encoded_chunks.append(chunk_data)
 
-        return img, qr_data
+        return qr_images, encoded_chunks
 
     def decode_qr_data(self, qr_data: str) -> str:
         """

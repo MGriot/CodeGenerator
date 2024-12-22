@@ -1,10 +1,12 @@
 import os
 import sys
+import json
+import shutil
+import pytest
 
 # Add the parent directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import pytest
 from src.CodeGenerator import (
     QRCodeMasterProcessor,
     TextQRProcessor,
@@ -12,20 +14,36 @@ from src.CodeGenerator import (
     FolderQRProcessor,
 )
 
+@pytest.fixture
+def setup_test_files():
+    # Create test directory and files
+    os.makedirs("test_folder", exist_ok=True)
+    with open("test_file.txt", "w") as f:
+        f.write("Test content")
+    with open(os.path.join("test_folder", "test1.txt"), "w") as f:
+        f.write("Test content 1")
+    
+    yield
+    
+    # Cleanup
+    if os.path.exists("test_file.txt"):
+        os.remove("test_file.txt")
+    if os.path.exists("test_folder"):
+        shutil.rmtree("test_folder")
 
 class TestQRCodeMasterProcessor:
     def test_init(self):
         processor = QRCodeMasterProcessor()
         assert processor is not None
+        assert processor.encryption_key is not None
 
-    def test_process(self):
+    def test_encode_decode(self):
         processor = QRCodeMasterProcessor()
-        # Mock input and output files
-        input_file = "input.txt"
-        output_file = "output.txt"
-        processor.process(input_file, output_file)
-        assert True  # Replace with actual assertion
-
+        test_data = "Test string"
+        qr_image, encoded_data = processor.generate_qr_code(test_data)
+        assert qr_image is not None
+        decoded = processor.decode_qr_data(encoded_data)
+        assert decoded == test_data
 
 class TestTextQRProcessor:
     def test_init(self):
@@ -35,50 +53,50 @@ class TestTextQRProcessor:
     def test_generate_qr_code(self):
         processor = TextQRProcessor()
         text = "Hello, World!"
-        qr_image, encoded_data = processor.generate_qr_code(text)
-        assert qr_image is not None
-        assert encoded_data is not None
+        qr_images, encoded_data = processor.generate_qr_code(text)
+        assert len(qr_images) > 0
+        assert len(encoded_data) > 0
 
     def test_decode_qr_data(self):
         processor = TextQRProcessor()
-        encoded_data = " encoded data "
-        decoded_text = processor.decode_qr_data(encoded_data)
-        assert decoded_text is not None
-
+        test_data = "Test data"
+        _, encoded_data = processor.generate_qr_code(test_data)
+        decoded_text = processor.decode_qr_data(encoded_data[0])
+        assert decoded_text == test_data
 
 class TestFileQRProcessor:
     def test_init(self):
         processor = FileQRProcessor()
         assert processor is not None
 
-    def test_generate_file_qr_code(self):
+    def test_generate_file_qr_code(self, setup_test_files):
         processor = FileQRProcessor()
-        file_path = "test_file.txt"
-        qr_image, encoded_data = processor.generate_file_qr_code(file_path)
-        assert qr_image is not None
-        assert encoded_data is not None
+        qr_images, encoded_data = processor.generate_file_qr_code("test_file.txt")
+        assert len(qr_images) > 0
+        assert len(encoded_data) > 0
 
-    def test_reconstruct_file_from_qr(self):
+    def test_reconstruct_file_from_qr(self, setup_test_files):
         processor = FileQRProcessor()
-        encoded_data = " encoded data "
-        reconstructed_file_path = processor.reconstruct_file_from_qr(encoded_data)
-        assert reconstructed_file_path is not None
-
+        _, encoded_data = processor.generate_file_qr_code("test_file.txt")
+        reconstructed_path = processor.reconstruct_file_from_qr(encoded_data[0])
+        assert os.path.exists(reconstructed_path)
+        with open(reconstructed_path, 'r') as f:
+            assert f.read() == "Test content"
 
 class TestFolderQRProcessor:
     def test_init(self):
         processor = FolderQRProcessor()
         assert processor is not None
 
-    def test_generate_folder_qr_code(self):
+    def test_generate_folder_qr_code(self, setup_test_files):
         processor = FolderQRProcessor()
-        folder_path = "test_folder"
-        qr_image, encoded_data = processor.generate_folder_qr_code(folder_path)
-        assert qr_image is not None
-        assert encoded_data is not None
+        qr_images, encoded_data = processor.generate_folder_qr_code("test_folder")
+        assert len(qr_images) > 0
+        assert len(encoded_data) > 0
 
-    def test_reconstruct_folder_from_qr(self):
+    def test_reconstruct_folder_from_qr(self, setup_test_files):
         processor = FolderQRProcessor()
-        encoded_data = " encoded data "
-        reconstructed_folder_path = processor.reconstruct_folder_from_qr(encoded_data)
-        assert reconstructed_folder_path is not None
+        _, encoded_data = processor.generate_folder_qr_code("test_folder")
+        reconstructed_path = processor.reconstruct_folder_from_qr(encoded_data[0])
+        assert os.path.exists(reconstructed_path)
+        assert os.path.exists(os.path.join(reconstructed_path, "test1.txt"))
