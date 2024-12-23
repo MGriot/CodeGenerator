@@ -143,6 +143,12 @@ class QRCodeMasterProcessor:
         """Convert bytes to base64 string"""
         return base64.b64encode(data).decode('utf-8')
 
+    def _split_data_for_qr(self, data: str, max_chunk_size: int) -> List[str]:
+        """Split data into chunks for QR code encoding"""
+        return [
+            data[i: i + max_chunk_size] for i in range(0, len(data), max_chunk_size)
+        ]
+
     def generate_qr_code(
         self,
         data: Union[str, bytes],
@@ -162,27 +168,33 @@ class QRCodeMasterProcessor:
         # Process data based on flags
         if compress:
             processed_data = self.compress_data(processed_data)
-            processed_data = self._encode_base64_str(processed_data)
 
         if encrypt:
-            processed_data = self.encrypt_data(processed_data if isinstance(processed_data, bytes) else processed_data.encode('utf-8'))
-            processed_data = self._encode_base64_str(processed_data)
+            processed_data = self.encrypt_data(processed_data)
 
-        if not (compress or encrypt):
-            processed_data = processed_data.decode('utf-8') if isinstance(processed_data, bytes) else processed_data
+        # Convert to base64 after all processing
+        base64_data = base64.b64encode(processed_data).decode('utf-8')
 
-        # Create QR data
-        qr_data = json.dumps({"metadata": metadata, "content": processed_data})
-        chunks = self._split_data_for_qr(qr_data, max_chunk_size)
-
+        # Create the full data structure
+        qr_data = {"metadata": metadata, "content": base64_data}
+        full_data = json.dumps(qr_data)
+        
+        # Split into chunks
+        chunks = self._split_data_for_qr(full_data, max_chunk_size)
+        
         qr_images = []
         encoded_chunks = []
 
-        for i, chunk in enumerate(chunks):
+        for i, chunk_content in enumerate(chunks):
             chunk_metadata = metadata.copy()
             chunk_metadata["chunk_number"] = i + 1
             chunk_metadata["total_chunks"] = len(chunks)
-            chunk_data = json.dumps({"metadata": chunk_metadata, "content": chunk})
+            
+            # Create chunk data
+            chunk_data = json.dumps({
+                "metadata": chunk_metadata,
+                "content": chunk_content
+            })
 
             version = self._calculate_qr_version(chunk_data)
             qr = qrcode.QRCode(
@@ -201,42 +213,75 @@ class QRCodeMasterProcessor:
 
     def decode_qr_data(self, qr_data: str) -> str:
         """
-        Decode data from a QR code, automatically detecting and applying
-        decompression and decryption based on metadata.
-
-        Args:
-            qr_data (str): Full QR code data including metadata
-
-        Returns:
-            str: Decoded data
+        Decode data from a QR code.
         """
-        # Parse the JSON data
-        qr_json = json.loads(qr_data)
-        metadata = qr_json["metadata"]
-        qr_content = qr_json["content"]
+        try:
+            # Parse the JSON data
+            qr_json = json.loads(qr_data)
+            metadata = qr_json["metadata"]
+            content = qr_json["content"]
 
-        # Process data based on metadata
-        decoded_data = qr_content.encode("utf-8")
+            # If this is a chunk, we need to parse it further
+            if "chunk_number" in metadata:
+                try:
+                    # Parse the inner JSON content
+                    inner_json = json.loads(content)
+                    content = inner_json["content"]
+                except json.JSONDecodeError:
+                    # If not JSON, use content as is
+                    pass
 
-        if metadata.get("encrypted", False):
-            decoded_data = self.decrypt_data(base64.b64decode(decoded_data))
+            # For complete data, decode base64 and process
+            try:
+                decoded_content = base64.b64decode(content)
+            except Exception as e:
+                # Add padding if needed
+                padding_needed = len(content) % 4
+                if padding_needed:
+                    content += '=' * (4 - padding_needed)
+                try:
+                    decoded_content = base64.b64decode(content)
+                except Exception as e2:
+                    raise ValueError(f"Base64 decoding failed: {str(e2)}")
 
-        if metadata.get("compressed", False):
-            decoded_data = self.decompress_data(base64.b64decode(decoded_data))
+            # Process based on metadata in reverse order
+            if metadata.get("encrypted", False):
+                decoded_content = self.decrypt_data(decoded_content)
 
-        return decoded_data.decode("utf-8")
+            if metadata.get("compressed", False):
+                decoded_content = self.decompress_data(decoded_content)
+
+            # Convert final bytes to string
+            return decoded_content.decode("utf-8")
+
+        except Exception as e:
+            raise ValueError(f"Failed to decode QR data: {str(e)}")
 
     def save_qr_code(
-        self, qr_image: Image.Image, filename: str = "qr_code.png"
-    ) -> None:
+        self, qr_images: Union[Image.Image, List[Image.Image]], filename: str = "qr_code.png"
+    ) -> List[str]:
         """
-        Save the generated QR code to an image file.
+        Save the generated QR code(s) to image file(s).
 
         Args:
-            qr_image (Image.Image): QR code image to save
-            filename (str, optional): Output filename
+            qr_images (Union[Image.Image, List[Image.Image]]): QR code image(s) to save
+            filename (str, optional): Base output filename
+
+        Returns:
+            List[str]: List of saved filenames
         """
-        qr_image.save(filename)
+        if isinstance(qr_images, list):
+            saved_files = []
+            for i, img in enumerate(qr_images):
+                # Generate filename for multiple images
+                name, ext = os.path.splitext(filename)
+                current_filename = f"{name}_{i+1}{ext}"
+                img.save(current_filename)
+                saved_files.append(current_filename)
+            return saved_files
+        else:
+            qr_images.save(filename)
+            return [filename]
 
 
 class TextQRProcessor(QRCodeMasterProcessor):
@@ -293,37 +338,32 @@ class FileQRProcessor(QRCodeMasterProcessor):
 
     def generate_file_qr_code(
         self, file_path: str, compress: bool = False, encrypt: bool = False
-    ) -> Tuple[Image.Image, str]:
-        """
-        Generate a QR code from a file's content.
-
-        Args:
-            file_path (str): Path to the file
-            compress (bool, optional): Whether to compress the file content
-            encrypt (bool, optional): Whether to encrypt the file content
-
-        Returns:
-            tuple: (qr_code_image, encoded_file_data_json)
-        """
-        # Validate file exists
+    ) -> Tuple[List[Image.Image], List[str]]:
+        """Generate a QR code from a file's content."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         # Get file content and type
         file_content, is_text = self._get_file_content(file_path)
 
-        # Generate comprehensive metadata
+        # Calculate hash before any transformation
+        if is_text:
+            # For text files, hash the raw content
+            file_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()
+        else:
+            # For binary files, hash the raw bytes before base64 encoding
+            with open(file_path, "rb") as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+
+        # Generate metadata
         metadata = {
             "original_filename": os.path.basename(file_path),
             "filename": os.path.splitext(os.path.basename(file_path))[0],
             "extension": os.path.splitext(file_path)[1],
             "is_text": is_text,
             "file_size": os.path.getsize(file_path),
+            "file_hash": file_hash
         }
-
-        # Calculate file hash
-        file_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()
-        metadata["file_hash"] = file_hash
 
         # Generate QR code from file content
         return self.generate_qr_code(file_content, compress, encrypt, metadata)
@@ -334,67 +374,56 @@ class FileQRProcessor(QRCodeMasterProcessor):
         output_dir: Optional[str] = None,
         custom_filename: Optional[str] = None,
     ) -> str:
-        """
-        Reconstruct a file from QR code data.
-
-        Args:
-            qr_data (str): Full QR code data including metadata
-            output_dir (Optional[str]): Directory to save the file
-            custom_filename (Optional[str]): Custom filename to use
-
-        Returns:
-            str: Path to the reconstructed file
-        """
+        """Reconstruct a file from QR code data."""
         # Parse the JSON data
         qr_json = json.loads(qr_data)
         metadata = qr_json.get("metadata", {})
-        print(metadata)
-
+        
         # Decode the file content
         file_content = self.decode_qr_data(qr_data)
-
-        # Prepare output directory
+        
+        # Prepare output path
         output_dir = output_dir or os.getcwd()
-
-        # Determine filename
-        if custom_filename:
-            filename = os.path.splitext(custom_filename)[0]
-            extension = os.path.splitext(custom_filename)[1] or metadata.get(
-                "extension", ""
-            )
-        else:
-            filename = metadata.get("filename", "reconstructed_file")
-            extension = metadata.get("extension", "")
-        # Construct full path
-        full_path = os.path.join(output_dir, f"{filename}{extension}")
-
+        filename = (os.path.splitext(custom_filename)[0] if custom_filename 
+                   else metadata.get("filename", "reconstructed_file"))
+        extension = (os.path.splitext(custom_filename)[1] if custom_filename 
+                   else metadata.get("extension", ""))
+        
         # Ensure unique filename
+        full_path = os.path.join(output_dir, f"{filename}{extension}")
         counter = 1
-        base_full_path = full_path
         while os.path.exists(full_path):
-            filename_part = os.path.splitext(base_full_path)[0]
-            ext_part = os.path.splitext(base_full_path)[1]
-            full_path = f"{filename_part}_{counter}{ext_part}"
+            full_path = os.path.join(output_dir, f"{filename}_{counter}{extension}")
             counter += 1
 
         # Verify file integrity
         if metadata.get("file_hash"):
-            current_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()
-            if current_hash != metadata.get("file_hash"):
+            try:
+                if metadata.get("is_text", True):
+                    # For text files, verify using the decoded content
+                    current_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()
+                else:
+                    # For binary files, verify using the decoded bytes
+                    binary_content = base64.b64decode(file_content)
+                    current_hash = hashlib.md5(binary_content).hexdigest()
+
+                if current_hash != metadata["file_hash"]:
+                    print(f"Hash mismatch: Expected {metadata['file_hash']}, got {current_hash}")
+                    raise ValueError("File integrity check failed")
+            except Exception as e:
+                print(f"Hash verification error: {str(e)}")
                 raise ValueError("File integrity check failed")
 
-        # Write file
+        # Write file content
         try:
             if metadata.get("is_text", True):
-                # Write text files
                 with open(full_path, "w", encoding="utf-8") as f:
                     f.write(file_content)
             else:
-                # Decode and write binary files
                 with open(full_path, "wb") as f:
                     f.write(base64.b64decode(file_content))
         except Exception as e:
-            # Fallback writing mechanism
+            print(f"File writing error: {str(e)}")
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(str(file_content))
 
@@ -487,7 +516,7 @@ class FolderQRProcessor(FileQRProcessor):
         folder_path: str,
         compress: bool = True,
         encrypt: bool = True,
-        max_depth: int = 3,
+        max_depth: int = 3
     ):
         """
         Generate a QR code representing an entire folder structure.
@@ -768,11 +797,12 @@ def main():
     text_processor = TextQRProcessor()
     original_text = "Hello, this is a test message for QR code generation!"
 
-    text_qr_image, text_encoded_data = text_processor.generate_qr_code(
+    text_qr_images, text_encoded_data = text_processor.generate_qr_code(
         original_text, compress=True, encrypt=True
     )
-    text_processor.save_qr_code(text_qr_image, "text_qr_code.png")
-    decoded_text = text_processor.decode_qr_data(text_encoded_data)
+    saved_files = text_processor.save_qr_code(text_qr_images, "text_qr_code.png")
+    print(f"Saved QR codes to: {', '.join(saved_files)}")
+    decoded_text = text_processor.decode_qr_data(text_encoded_data[0])  # Take first chunk
     print("Text Decoding Test:")
     print("Original Text:", original_text)
     print("Decoded Text:", decoded_text)
@@ -787,13 +817,14 @@ def main():
     with open(test_file_path, "w") as f:
         f.write("This is a test file content for QR code generation.")
 
-    file_qr_image, file_encoded_data = file_processor.generate_file_qr_code(
+    file_qr_images, file_encoded_data = file_processor.generate_file_qr_code(
         test_file_path, compress=False, encrypt=True
     )
-    file_processor.save_qr_code(file_qr_image, "file_qr_code.png")
+    saved_files = file_processor.save_qr_code(file_qr_images, "file_qr_code.png")
+    print(f"Saved file QR codes to: {', '.join(saved_files)}")
 
     # Reconstruct the file
-    reconstructed_file_path = file_processor.reconstruct_file_from_qr(file_encoded_data)
+    reconstructed_file_path = file_processor.reconstruct_file_from_qr(file_encoded_data[0])
     print("File Reconstruction Test:")
     print("Original File:", test_file_path)
     print("Reconstructed File:", reconstructed_file_path)
