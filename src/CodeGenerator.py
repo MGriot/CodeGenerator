@@ -13,6 +13,10 @@ from cryptography.fernet import Fernet
 from typing import Optional, Union, Tuple, Dict, Any, List
 from PIL import Image
 
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+
 class CompressionType(Enum):
     NONE = "none"
     ZLIB = "zlib"
@@ -46,7 +50,7 @@ class QRCodeMasterProcessor:
     def _calculate_qr_version(self, data: str, max_version: int = 40) -> int:
         """Calculate the appropriate QR code version based on data length."""
         data_length = len(data)
-        
+
         # Version map with more accurate capacity estimates
         version_map = [
             (17, 1),    # Version 1
@@ -105,32 +109,39 @@ class QRCodeMasterProcessor:
         input_bytes = data.encode("utf-8") if isinstance(data, str) else data
 
         if config.type == CompressionType.NONE:
+            logging.debug(f"Compression type: NONE")
             return input_bytes
 
         try:
             if config.type == CompressionType.ZLIB:
-                return zlib.compress(input_bytes, level=config.level.value)
+                compressed_data = zlib.compress(input_bytes, level=config.level.value)
             elif config.type == CompressionType.LZMA:
-                return lzma.compress(input_bytes, preset=config.level.value)
+                compressed_data = lzma.compress(input_bytes, preset=config.level.value)
             elif config.type == CompressionType.BZ2:
-                return bz2.compress(input_bytes, compresslevel=config.level.value)
+                compressed_data = bz2.compress(input_bytes, compresslevel=config.level.value)
+            logging.debug(f"Compressed data: {compressed_data}")
+            return compressed_data
         except Exception as e:
-            print(f"Compression failed with {config.type.value}, falling back to ZLIB: {str(e)}")
+            logging.error(f"Compression failed with {config.type.value}: {str(e)}")
             return zlib.compress(input_bytes, level=CompressionLevel.BALANCED.value)
 
     def decompress_data(self, compressed_data: bytes, compression_type: str) -> bytes:
         """Decompress data using specified algorithm."""
         if compression_type == CompressionType.NONE.value:
+            logging.debug(f"Decompression type: NONE")
             return compressed_data
 
         try:
             if compression_type == CompressionType.ZLIB.value:
-                return zlib.decompress(compressed_data)
+                decompressed_data = zlib.decompress(compressed_data)
             elif compression_type == CompressionType.LZMA.value:
-                return lzma.decompress(compressed_data)
+                decompressed_data = lzma.decompress(compressed_data)
             elif compression_type == CompressionType.BZ2.value:
-                return bz2.decompress(compressed_data)
+                decompressed_data = bz2.decompress(compressed_data)
+            logging.debug(f"Decompressed data: {decompressed_data}")
+            return decompressed_data
         except Exception as e:
+            logging.error(f"Decompression failed with {compression_type}: {str(e)}")
             raise ValueError(f"Decompression failed with {compression_type}: {str(e)}")
 
     def encrypt_data(self, data: Union[str, bytes]) -> bytes:
@@ -143,15 +154,20 @@ class QRCodeMasterProcessor:
         Returns:
             bytes: Encrypted data
         """
-        # Convert to bytes if input is string
         input_bytes = data.encode("utf-8") if isinstance(data, str) else data
-        return self.cipher_suite.encrypt(input_bytes)
+        encrypted_data = self.cipher_suite.encrypt(input_bytes)
+        logging.debug(f"Encrypted data: {encrypted_data}")
+        return encrypted_data
+
 
     def decrypt_data(self, encrypted_data: bytes) -> bytes:
         """Decrypt data using Fernet symmetric encryption."""
         try:
-            return self.cipher_suite.decrypt(encrypted_data)
+            decrypted_data = self.cipher_suite.decrypt(encrypted_data)
+            logging.debug(f"Decrypted data: {decrypted_data}")
+            return decrypted_data
         except Exception as e:
+            logging.error(f"Decryption failed: {str(e)}")
             raise ValueError(f"Decryption failed: {str(e)}")
 
     def _encode_base64_str(self, data: bytes) -> str:
@@ -200,28 +216,29 @@ class QRCodeMasterProcessor:
         try:
             # Process data first to check final size
             processed_data = data.encode("utf-8") if isinstance(data, str) else data
-            
+
             # Try compression if enabled
             if compress and compression_config:
                 processed_data = self.compress_data(processed_data, compression_config)
                 metadata["compressed"] = True
                 metadata["compression_type"] = compression_config.type.value
-            
+
             # Apply encryption if enabled
             if encrypt:
                 processed_data = self.encrypt_data(processed_data)
                 metadata["encrypted"] = True
-            
+
             # Convert to base64
             base64_data = base64.b64encode(processed_data).decode('utf-8')
-            
+
             # Create initial data structure
             qr_data = {"metadata": metadata, "content": base64_data}
             full_data = json.dumps(qr_data)
-            
+
             # Check if data is too large
             data_size = len(full_data)
-            print(full_data)
+            logging.debug(f"Full data size: {data_size} bytes")
+            logging.debug(f"Estimated QR capacity: {self._estimate_qr_capacity(40, qrcode.constants.ERROR_CORRECT_H)} bytes")
             if data_size > self._estimate_qr_capacity(40, qrcode.constants.ERROR_CORRECT_H):
                 suggestions = self._suggest_compression_method(data_size)
                 if not compress:
@@ -243,7 +260,7 @@ class QRCodeMasterProcessor:
                 chunk_metadata = metadata.copy()
                 chunk_metadata["chunk_number"] = i + 1
                 chunk_metadata["total_chunks"] = len(chunks)
-                
+
                 chunk_data = json.dumps({
                     "metadata": chunk_metadata,
                     "content": chunk_content
@@ -251,6 +268,7 @@ class QRCodeMasterProcessor:
 
                 # Create QR code with appropriate version
                 version = self._calculate_qr_version(chunk_data)
+                logging.debug(f"QR code version: {version}")
                 qr = qrcode.QRCode(
                     version=version,
                     error_correction=qrcode.constants.ERROR_CORRECT_H,
@@ -259,13 +277,13 @@ class QRCodeMasterProcessor:
                 )
                 qr.add_data(chunk_data)
                 qr.make(fit=True)
-                
+
                 qr_images.append(qr.make_image(fill_color="black", back_color="white"))
                 encoded_chunks.append(chunk_data)
 
             if len(chunks) > 1:
-                print(f"Content split into {len(chunks)} QR codes due to size.")
-                print(f"Use all QR codes in sequence for complete data.")
+                logging.debug(f"Content split into {len(chunks)} QR codes due to size.")
+                logging.debug(f"Use all QR codes in sequence for complete data.")
 
             return qr_images, encoded_chunks
 
@@ -274,7 +292,6 @@ class QRCodeMasterProcessor:
                 suggestions = self._suggest_compression_method(len(full_data))
                 raise ValueError(f"Content too large for QR code.\n{suggestions}")
             raise ValueError(f"Failed to generate QR code: {str(e)}")
-
     def decode_qr_data(self, qr_data: str) -> Union[str, bytes]:
         """Decode QR data, handling both text and binary content."""
         try:
@@ -282,13 +299,6 @@ class QRCodeMasterProcessor:
             metadata = qr_json.get("metadata", {})
             content = qr_json.get("content", "")
             is_text = metadata.get("is_text", True)
-
-            if "chunk_number" in metadata:
-                try:
-                    inner_json = json.loads(content)
-                    content = inner_json.get("content", content)
-                except json.JSONDecodeError:
-                    pass
 
             padding_attempts = [
                 content,
@@ -329,6 +339,7 @@ class QRCodeMasterProcessor:
             return decoded_content
 
         except Exception as e:
+            logging.error(f"Failed to decode QR data: {str(e)}")
             raise ValueError(f"Failed to decode QR data: {str(e)}")
 
     def save_qr_code(
@@ -378,17 +389,8 @@ class TextQRProcessor(QRCodeMasterProcessor):
 
 class FileQRProcessor(QRCodeMasterProcessor):
 
-    def _get_file_content(self, file_path: str) -> Tuple[str, bool]:
-        """
-        Read file content and determine how to process it.
-
-        Args:
-            file_path (str): Path to the file
-
-        Returns:
-            Tuple of (processed_content, is_text)
-        """
-        # Text file extensions
+    def _get_file_content(self, file_path: str) -> Tuple[str, bool, str]:
+        """Read file content and determine how to process it."""
         text_extensions = {
             ".txt",
             ".md",
@@ -404,25 +406,29 @@ class FileQRProcessor(QRCodeMasterProcessor):
             ".config",
         }
 
-        # Get file extension
         file_extension = os.path.splitext(file_path)[1].lower()
-
-        # Determine if it's a text file
         is_text = file_extension in text_extensions
 
         try:
             if is_text:
-                # Read text files normally
                 with open(file_path, "r", encoding="utf-8") as f:
-                    return f.read(), True
+                    file_content = f.read()
             else:
-                # Read binary files and convert to base64
                 with open(file_path, "rb") as f:
                     file_bytes = f.read()
-                    return base64.b64encode(file_bytes).decode("utf-8"), False
+                    file_content = base64.b64encode(file_bytes).decode("utf-8")
         except Exception as e:
-            # Fallback for problematic files
-            return base64.b64encode(str(e).encode()).decode("utf-8"), False
+            file_content = base64.b64encode(str(e).encode()).decode("utf-8")
+            is_text = False
+
+        # Calculate hash before any transformation
+        if is_text:
+            file_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()
+        else:
+            file_hash = hashlib.md5(base64.b64decode(file_content)).hexdigest()
+
+        logging.debug(f"Original file hash: {file_hash}")
+        return file_content, is_text, file_hash
 
     def generate_file_qr(
         self,
@@ -452,16 +458,7 @@ class FileQRProcessor(QRCodeMasterProcessor):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         # Get file content and type
-        file_content, is_text = self._get_file_content(file_path)
-
-        # Calculate hash before any transformation
-        if is_text:
-            # For text files, hash the raw content
-            file_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()
-        else:
-            # For binary files, hash the raw bytes before base64 encoding
-            with open(file_path, "rb") as f:
-                file_hash = hashlib.md5(f.read()).hexdigest()
+        file_content, is_text, file_hash = self._get_file_content(file_path)
 
         # Generate metadata
         metadata = {
@@ -473,9 +470,80 @@ class FileQRProcessor(QRCodeMasterProcessor):
             "file_hash": file_hash
         }
 
-        # Generate QR code from file content
-        return self.generate_qr_code(file_content, compress, compression_config, encrypt, metadata)
+        # Initialize scaled_file_content with the original file content
+        scaled_file_content = file_content
 
+        # Try compression if enabled
+        if compress and compression_config:
+            scaled_file_content = self.compress_data(scaled_file_content, compression_config)
+            metadata["compressed"] = True
+            metadata["compression_type"] = compression_config.type.value
+            logging.debug(f"Compressed file content: {scaled_file_content}")
+
+        # Apply encryption if enabled
+        if encrypt:
+            scaled_file_content = self.encrypt_data(scaled_file_content)
+            metadata["encrypted"] = True
+            logging.debug(f"Encrypted file content: {scaled_file_content}")
+
+        # Convert to base64
+        base64_data = base64.b64encode(scaled_file_content).decode('utf-8')
+        logging.debug(f"Base64 encoded file content: {base64_data}")
+
+        qr_data = {"metadata": metadata, "content": base64_data}
+        full_data = json.dumps(qr_data)
+        logging.debug(f"Full QR data: {full_data}")
+
+        data_size = len(full_data)
+        logging.debug(f"Full data size: {data_size} bytes")
+        logging.debug(f"Estimated QR capacity: {self._estimate_qr_capacity(40, qrcode.constants.ERROR_CORRECT_H)} bytes")
+
+        if data_size > self._estimate_qr_capacity(40, qrcode.constants.ERROR_CORRECT_H):
+            suggestions = self._suggest_compression_method(data_size)
+            if not compress:
+                raise ValueError(f"Data too large for QR code. Try enabling compression.\n{suggestions}")
+            else:
+                # Automatically split into multiple chunks
+                chunk_size = self._estimate_qr_capacity(30, qrcode.constants.ERROR_CORRECT_H)
+                chunks = self._split_data_for_qr(full_data, chunk_size)
+                metadata["auto_chunked"] = True
+                metadata["total_chunks"] = len(chunks)
+        else:
+            chunks = [full_data]
+
+        qr_images = []
+        encoded_chunks = []
+
+        for i, chunk_content in enumerate(chunks):
+            chunk_metadata = metadata.copy()
+            chunk_metadata["chunk_number"] = i + 1
+            chunk_metadata["total_chunks"] = len(chunks)
+            
+            chunk_data = json.dumps({
+                "metadata": chunk_metadata,
+                "content": chunk_content
+            })
+            logging.debug(f"Chunk data: {chunk_data}")
+
+            version = self._calculate_qr_version(chunk_data)
+            logging.debug(f"QR code version: {version}")
+            qr = qrcode.QRCode(
+                version=version,
+                error_correction=qrcode.constants.ERROR_CORRECT_H,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(chunk_data)
+            qr.make(fit=True)
+            
+            qr_images.append(qr.make_image(fill_color="black", back_color="white"))
+            encoded_chunks.append(chunk_data)
+
+        if len(chunks) > 1:
+            logging.debug(f"Content split into {len(chunks)} QR codes due to size.")
+            logging.debug(f"Use all QR codes in sequence for complete data.")
+
+        return qr_images, encoded_chunks
     def reconstruct_file_from_qr(
         self,
         qr_data: str,
@@ -484,12 +552,19 @@ class FileQRProcessor(QRCodeMasterProcessor):
     ) -> str:
         """Reconstruct a file from QR code data."""
         # Parse the JSON data
-        qr_json = json.loads(qr_data)
+        try:
+            qr_json = json.loads(qr_data)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse QR data: {str(e)}")
+            raise ValueError(f"Failed to parse QR data: {str(e)}")
+
         metadata = qr_json.get("metadata", {})
-        
+        chunk_content = qr_json.get("content", "")
+
         # Decode the file content
-        file_content = self.decode_qr_data(qr_data)
-        
+        file_content = self.decode_qr_data(chunk_content)
+        logging.debug(f"Decoded file content: {file_content}")
+
         # Prepare output path
         output_dir = output_dir or os.getcwd()
         filename = (os.path.splitext(custom_filename)[0] if custom_filename 
@@ -519,11 +594,12 @@ class FileQRProcessor(QRCodeMasterProcessor):
                     binary_content = file_content
                     current_hash = hashlib.md5(binary_content).hexdigest()
 
-                if current_hash != metadata["file_hash"]:
+                logging.debug(f"Reconstructed file hash: {current_hash}")
 
+                if current_hash != metadata["file_hash"]:
                     raise ValueError(f"File integrity check failed\nHash mismatch: Expected {metadata['file_hash']}, got {current_hash}")
             except Exception as e:
-                print(f"Hash verification error: {str(e)}")
+                logging.error(f"Hash verification error: {str(e)}")
                 raise ValueError("File integrity check failed")
 
         # Write file content
@@ -535,12 +611,35 @@ class FileQRProcessor(QRCodeMasterProcessor):
                 with open(full_path, "wb") as f:
                     f.write(file_content)
         except Exception as e:
-            print(f"File writing error: {str(e)}")
-            with open(full_path, "w", encoding="utf-8") as f:
-                f.write(str(file_content))
+            logging.error(f"File writing error: {str(e)}")
+            raise ValueError("Failed to write reconstructed file")
 
         return full_path
 
+    def reconstruct_file_from_qr_chunks(
+        self, qr_chunks: List[str], output_dir: str = None
+    ) -> str:
+        """Reconstruct a file from multiple QR code chunks."""
+        # Decode and combine chunks
+        decoded_chunks = []
+        for chunk in qr_chunks:
+            # Decode the chunk
+            decoded_chunk = json.loads(self.decode_qr_data(chunk))
+            decoded_chunks.append(decoded_chunk)
+
+        # Sort chunks if chunk information is available
+        if decoded_chunks and "chunk_info" in decoded_chunks[0]:
+            decoded_chunks.sort(
+                key=lambda x: x.get("chunk_info", {}).get("chunk_number", 0)
+            )
+
+        # Combine children from all chunks
+        combined_data = ""
+        for chunk in decoded_chunks:
+            combined_data += chunk.get("content", "")
+
+        # Use existing reconstruction method
+        return self.reconstruct_file_from_qr(combined_data, output_dir)
 
 class FolderQRProcessor(FileQRProcessor):
     def _traverse_folder(
@@ -919,41 +1018,44 @@ def test_compression_string(
     return results
 
 
-def test_compression_file(file_path: str, filename_prefix: str = "file") -> Dict[str, Dict[str, int]]:
+def test_compression_file(
+    file_path: str, filename_prefix: str = "file"
+) -> Dict[str, Dict[str, int]]:
     """Test all compression types and levels for file."""
     file_processor = FileQRProcessor()
     results = {}
 
     # Read original file content for verification
-    with open(file_path, 'r', encoding='utf-8') as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         original_content = f.read()
 
     for comp_type in CompressionType:
         results[comp_type.value] = {}
         for comp_level in CompressionLevel:
-            print(f"\nTesting {comp_type.value} compression at level {comp_level.value}")
+            print(
+                f"\nTesting {comp_type.value} compression at level {comp_level.value}"
+            )
 
             # Generate QR code
             qr_images, encoded_data = file_processor.generate_file_qr(
                 file_path,
                 compression_type=comp_type,
                 compression_level=comp_level,
-                encrypt=True
+                encrypt=True,
             )
 
             # Save QR codes
             saved_files = file_processor.save_qr_code(
-                qr_images, 
-                f"{filename_prefix}_{comp_type.value}_{comp_level.value}.png"
+                qr_images, f"{filename_prefix}_{comp_type.value}_{comp_level.value}.png"
             )
 
             # Reconstruct and verify
             reconstructed_file = file_processor.reconstruct_file_from_qr(
                 encoded_data[0],
-                custom_filename=f"reconstructed_{comp_type.value}_{comp_level.value}.txt"
+                custom_filename=f"reconstructed_{comp_type.value}_{comp_level.value}.txt",
             )
 
-            with open(reconstructed_file, 'r', encoding='utf-8') as f:
+            with open(reconstructed_file, "r", encoding="utf-8") as f:
                 reconstructed_content = f.read()
 
             success = reconstructed_content == original_content
