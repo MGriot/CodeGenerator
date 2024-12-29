@@ -12,6 +12,7 @@ from src.CodeGenerator import (
     TextQRProcessor,
     FileQRProcessor,
     FolderQRProcessor,
+    CompressionType,
 )
 
 import unittest
@@ -104,8 +105,8 @@ class TestQRCodeProcessors(unittest.TestCase):
         self.assertEqual(decrypted_data.decode("utf-8"), self.test_text)
 
     def test_text_qr_code_generation_and_decoding(self):
-        qr_images, encoded_data = self.text_processor.generate_qr_code(
-            self.test_text, compress=True, encrypt=True
+        qr_images, encoded_data = self.text_processor.generate_text_qr(
+            self.test_text, compression_type=CompressionType.ZLIB, encrypt=True
         )
         self.assertIsInstance(qr_images, list)
         self.assertTrue(all(isinstance(img, Image.Image) for img in qr_images))
@@ -115,8 +116,8 @@ class TestQRCodeProcessors(unittest.TestCase):
         self.assertEqual(decoded_text, self.test_text)
 
     def test_file_qr_code_generation_and_reconstruction(self):
-        qr_images, encoded_data = self.file_processor.generate_file_qr_code(
-            self.test_file_path, compress=True, encrypt=True
+        qr_images, encoded_data = self.file_processor.generate_file_qr(
+            self.test_file_path, compression_type=CompressionType.ZLIB, encrypt=True
         )
         self.assertIsInstance(qr_images, list)
         self.assertTrue(all(isinstance(img, Image.Image) for img in qr_images))
