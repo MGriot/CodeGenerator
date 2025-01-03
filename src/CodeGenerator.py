@@ -351,13 +351,13 @@ class QRCodeMasterProcessor:
                     decoded_content,
                     method=metadata.get("encryption_method", encryption_method),
                 )
-
+            print(f"decoded_content: {decoded_content}")
             if metadata.get("compressed", False):
                 decoded_content = self.decompress_data(
                     decoded_content,
                     method=metadata.get("compression_method", compression_method),
                 )
-
+            print(f"decoded_content: {decoded_content}")
             # Convert final bytes to string
             return decoded_content.decode("utf-8")
 
